@@ -45,7 +45,7 @@ void csv::split_string(std::string str, std::vector<float>& out)
 
 void csv::split_string_hex(std::string str, std::vector<unsigned char>& out)
 {
-	char byte[3];
+	char byte[4];
 	std::string tmp;
 	std::istringstream linestream(str);
 	float val;

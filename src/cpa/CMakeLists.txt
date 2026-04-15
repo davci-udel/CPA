@@ -1,5 +1,6 @@
 set(cpa_source_files
 	cpa.cpp
+	cpaP.cpp
 )
 
 if (OPENCL_LIB AND OPENCL_INC)

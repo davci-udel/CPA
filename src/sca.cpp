@@ -32,6 +32,7 @@
 
 #include "common/aes-op.hpp"
 #include "cpa/cpa.hpp"
+#include "cpa/cpaP.hpp"
 
 int main(int argc, char *argv[])
 {
@@ -318,7 +319,14 @@ int main(int argc, char *argv[])
 	//}	
 
 	std::chrono::duration<double> runtime = std::chrono::system_clock::now() - start_time;
-	std::cout << "Overall runtime: " << runtime.count() << " seconds" << std::endl;
+	std::cout << "Overall runtime for sequential: " << runtime.count() << " seconds" << std::endl;
+	std::cout << std::endl;
+
+
+	start_time = std::chrono::system_clock::now();
+	cpaP::cpaP(data_path, ct_path, power_model_path, cells_type_path, clk_high, key_path, perm_path, HW, HD, SNR, candidates, permutations, steps, steps_start, steps_stop, rate_stop, verbose, key_expansion);
+	runtime = std::chrono::system_clock::now() - start_time;
+	std::cout << "Overall runtime for parallel: " << runtime.count() << " seconds" << std::endl;
 	std::cout << std::endl;
 
 	

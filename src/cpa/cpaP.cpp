@@ -36,20 +36,23 @@
 
 #include "../common/aes-op.hpp"
 #include "../common/csv_read.hpp"
+#include "cpaP.hpp"
 #include "cpa.hpp"
 #include "power-models.hpp"
 #include "stats.hpp"
 
 // (TODO) refactor parameters into struct
-void cpa::cpa(std::string data_path, std::string ct_path, std::string power_model_path, std::string cells_type_path, bool clk_high, std::string key_path, std::string perm_path, bool HW, bool HD, bool SNR_flag, bool candidates, int permutations, int steps, int steps_start, int steps_stop, float rate_stop, int verbose, bool key_expansion)
+void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_model_path, std::string cells_type_path, bool clk_high, std::string key_path, std::string perm_path, bool HW, bool HD, bool SNR_flag, bool candidates, int permutations, int steps, int steps_start, int steps_stop, float rate_stop, int verbose, bool key_expansion)
 {
+	#pragma omp parallel 
+	{
+		#pragma omp single
+		std::cout << "Thread count: " << omp_get_num_threads() << std::endl;
+	}
 	const int num_bytes = 16;
 	const int num_keys = 256;	
 
 	size_t num_traces;
-
-	float max_pt;
-	float data_pt;
 
 	int candidate;
 
@@ -199,17 +202,18 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 		( num_bytes, std::multimap<float, unsigned char> () );
 	std::vector<float> power_pts (num_traces, 0.0f);
 	std::vector< std::vector< std::vector<float> > > Hamming_pts 
-		( num_bytes, std::vector< std::vector<float> > 
-		(256, std::vector<float> (num_traces, 0.0f) ) );
+		( num_traces, std::vector< std::vector<float> > 
+		(num_bytes, std::vector<float> (256, 0.0f) ) );
 	std::vector< std::vector< std::vector<unsigned int> > > Hamming_pts__0_1_flips
-		( num_bytes, std::vector< std::vector<unsigned int> > 
-		(256, std::vector<unsigned int> (num_traces, 0) ) );
+		( num_traces, std::vector< std::vector<unsigned int> > 
+		(num_bytes, std::vector<unsigned int> (256, 0) ) );
 	std::vector< std::vector< std::vector<unsigned int> > > Hamming_pts__1_0_flips
-		( num_bytes, std::vector< std::vector<unsigned int> > 
-		(256, std::vector<unsigned int> (num_traces, 0) ) );
+		( num_traces, std::vector< std::vector<unsigned int> > 
+		(num_bytes, std::vector<unsigned int> (256, 0) ) );
 
 	std::vector<unsigned int> trace_indices (num_traces);
 	// Prepare with all trace indices; required for shuffling/generating permutations in case they are not read in
+	#pragma omp parallel for
 	for (unsigned int i = 0; i < num_traces; i++) {
 		trace_indices[i] = i;
 	}
@@ -221,20 +225,19 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 	//
 	// search the whole trace
 	float avg_max_pt = 0.0f;
+	#pragma omp parallel for reduction(+:avg_max_pt)
 	for (unsigned int i = 0; i < num_traces; i++)
 	{
-		max_pt = 0.0f;
+		float local_max_pt = 0.0f;
 		for (unsigned int j = 0; j < data.at(i).size(); j++)
 		{
-			//// dbg
-			// std::cout << std::dec << "Trace[" << i << "][" << j << "] = " << data.at(i).at(j) << std::endl;
-			data_pt = data.at(i).at(j);
-			if (max_pt < data_pt)
-				max_pt = data_pt;
+			float local_data_pt = data.at(i).at(j);
+			if (local_max_pt < local_data_pt)
+				local_max_pt = local_data_pt;
 		}
 	
-		power_pts[i] = max_pt;
-		avg_max_pt += max_pt;
+		power_pts[i] = local_max_pt;
+		avg_max_pt += local_max_pt;
 	}
 	avg_max_pt /= num_traces;
 	std::cout << std::dec << "Traces = " << num_traces << std::endl;
@@ -260,6 +263,7 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 		stats::stats(power_pts, mean, std_dev, var);
 
 		// compute NICV, SNR separately for each sub-key, key byte; follows principle of actual attacks
+		#pragma omp parallel for
 		for (int j = 0; j < 16; j++) {
 
 			NICV_ = 0;
@@ -448,15 +452,16 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 	std::cout<<std::endl;
 			
 	// Calculate Hamming points
+	#pragma omp parallel for schedule(dynamic)
 	for (unsigned int i = 0; i < num_traces; i++)
 	{
 		// Get cipher for this particular trace
+		std::vector< std::vector<unsigned char> > local_cipher (4, std::vector<unsigned char> (4));
 		for (int j = 0; j < 4; j++)
 			for (int k = 0; k < 4; k++)
-				cipher[k][j] = ciphertext.at(i).at(j * 4 + k);
+				local_cipher[k][j] = ciphertext.at(i).at(j * 4 + k);
 
 		// Find ciphertext bytes at different stages for the Hamming point calculation
-		//#pragma omp parallel for
 		for (int j = 0; j < num_bytes; j++)
 		{
 			int post_row;
@@ -466,7 +471,7 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 			// Select byte
 			post_row = j / 4;
 			post_col = j % 4;
-			post_byte = cipher[post_row][post_col];
+			post_byte = local_cipher[post_row][post_col];
 
 			// Create all possible bytes that could have resulted selected byte
 			for (int k = 0; k < num_keys; k++)
@@ -480,56 +485,33 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 				// Undo AES-128 operations
 				key_byte = static_cast<unsigned char> (k);
 				aes::shift_rows(post_row, post_col, pre_row, pre_col);
-				pre_byte = cipher[pre_row][pre_col];
+				pre_byte = local_cipher[pre_row][pre_col];
 				pre_byte = aes::add_round_key(key_byte, pre_byte);
 				pre_byte = aes::inv_sub_bytes(pre_byte);
 				byte_id = pre_col * 4 + pre_row;
 	
 				// apply the power model
 				if (HW) {
-					Hamming_pts[byte_id][k][i] = pm::Hamming_weight(pre_byte);
+					Hamming_pts[i][byte_id][k] = pm::Hamming_weight(pre_byte);
 				}
 				else if (HD) {
-					Hamming_pts[byte_id][k][i] = pm::Hamming_dist(pre_byte, post_byte);
+					Hamming_pts[i][byte_id][k] = pm::Hamming_dist(pre_byte, post_byte);
 				}
 				else {
-					Hamming_pts[byte_id][k][i] = pm::power(pre_byte, post_byte, byte_id, power_model, clk_high);
+					Hamming_pts[i][byte_id][k] = pm::power(pre_byte, post_byte, byte_id, power_model, clk_high);
 				}
 
-//				// dbg
-//				std::cout << "byte_id: " << byte_id << std::endl;
-//				std::cout << "pre_byte:  " << std::bitset<8>(pre_byte) << std::endl;
-//				std::cout << "post_byte: " << std::bitset<8>(post_byte) << std::endl;
-//				std::cout << "HD:        " << Hamming_pts[byte_id][k][i] << std::endl;
-//				std::cout << "1s in pre_byte: " << std::bitset<8>(pre_byte).count() << std::endl;
-//				std::cout << "0s in pre_byte: " << 8 - std::bitset<8>(pre_byte).count() << std::endl;
-//				std::cout << std::endl;
-
 				// also track the 0->1 and 1->0 flips
-				Hamming_pts__0_1_flips[byte_id][k][i] = 0;
-				Hamming_pts__1_0_flips[byte_id][k][i] = 0;
+				Hamming_pts__0_1_flips[i][byte_id][k] = 0;
+				Hamming_pts__1_0_flips[i][byte_id][k] = 0;
 				for (unsigned char b = 1 << 7; b > 0; b = b / 2)  {
 					// 0->1
 					if (!(pre_byte & b) && (post_byte & b))
-						Hamming_pts__0_1_flips[byte_id][k][i]++;
+						Hamming_pts__0_1_flips[i][byte_id][k]++;
 					// 1->0
 					if ((pre_byte & b) && !(post_byte & b))
-						Hamming_pts__1_0_flips[byte_id][k][i]++;
+						Hamming_pts__1_0_flips[i][byte_id][k]++;
 				}
-
-				//// dbg logging
-				//std::cout << "DBG>Key byte: " << j << "; key candidate: " << k << std::endl;
-				//std::cout << "DBG> pre_byte:  0b";
-				//for (int i = 1 << (8 - 1); i > 0; i = i / 2) 
-				//	(pre_byte & i)? printf("1"): printf("0");
-				//std::cout << std::endl;
-				//std::cout << "DBG> post_byte: 0b";
-				//for (int i = 1 << (8 - 1); i > 0; i = i / 2) 
-				//	(post_byte & i)? printf("1"): printf("0");
-				//std::cout << std::endl;
-				//std::cout << "DBG>  HD(pre_byte, post_byte, 8): " << Hamming_pts[byte_id][k][i] << std::endl;
-				//std::cout << "DBG>  0->1 flips: " << Hamming_pts__0_1_flips[byte_id][k][i] << std::endl;
-				//std::cout << "DBG>  1->0 flips: " << Hamming_pts__1_0_flips[byte_id][k][i] << std::endl;
 			}
 		}
 	}
@@ -537,6 +519,7 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 	// Consider multiple runs, as requested by step_size parameter
 	//
 	// s has to be float, to properly calculate data_pts
+	
 	for (float s = steps_start; s <= steps_stop; s++) {
 
 		int data_pts = num_traces * (s / steps);
@@ -626,27 +609,27 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 			// Derive correlation per key byte, to handle complexity, by decomposing into 16 * 2^8 candidates; ideally, correlation
 			// should be over all possible 2^128 key candidates but that's intractable
 			//
-			//#pragma omp parallel for
+			std::vector< std::vector<float>> temp_r_pts ( num_bytes, std::vector<float> (num_keys) );
+			#pragma omp parallel for collapse(2) schedule(dynamic, 1)
 			for (int i = 0; i < num_bytes; i++)
-			{
-				//// dbg logging
-				//std::cout << "Total count of OpenMP threads: " << omp_get_num_threads() << "\n";
-				
+			{	
+				for (int j = 0; j < num_keys; j++)
+				{
+					std::vector<float> column(num_traces);
+					for (size_t t = 0; t < num_traces; t++)
+						column[t] = Hamming_pts[t][i][j];
+
+					temp_r_pts[i][j] = stats::pearsonr(power_pts, column, trace_indices, data_pts);
+				}
+			}
+
+			for (int i = 0; i < num_bytes; i++)
+			{	
 				for (int j = 0; j < num_keys; j++)
 				{
 					// Pearson r correlation with power data
 					//
-					r_pts[i].emplace( std::make_pair(
-
-								// Note that power_pts and Hamming_pts[i][j] may contain the data for
-								// all traces; only the #data_pts data points from trace_indices[0] ...
-								// trace_indices[data_pts - 1] will be considered
-								stats::pearsonr(power_pts, Hamming_pts[i][j], trace_indices, data_pts),
-
-								// keep track of the related key byte in the multimap; this allows for easy
-								// extraction of the key later on
-								j
-							));
+					r_pts[i].emplace( std::make_pair(temp_r_pts[i][j],	j));
 				}
 			}
 
@@ -818,33 +801,33 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 						for (unsigned int i = 0; i < num_bytes; i++) {
 
 							avg_HD__ += Hamming_pts
+								[ trace_indices[trace] ]
 								[i]
 								[ correct_round_key[round_key_index][i] ]
-								[ trace_indices[trace] ]
 									;
 
 							avg_0_1_flips__ += Hamming_pts__0_1_flips
+								[ trace_indices[trace] ]
 								[i]
 								[ correct_round_key[round_key_index][i] ]
-								[ trace_indices[trace] ]
 									;
 
 							avg_1_0_flips__ += Hamming_pts__1_0_flips
+								[ trace_indices[trace] ]
 								[i]
 								[ correct_round_key[round_key_index][i] ]
-								[ trace_indices[trace] ]
 									;
 
 							avg_flips_HD_bytes__ += std::abs(static_cast<int>(
 									Hamming_pts__0_1_flips
+										[ trace_indices[trace] ]
 										[i]
 										[ correct_round_key[round_key_index][i] ]
-										[ trace_indices[trace] ]
 									- 
 									Hamming_pts__1_0_flips
+										[ trace_indices[trace] ]
 										[i]
 										[ correct_round_key[round_key_index][i] ]
-										[ trace_indices[trace] ]
 									));
 						}
 
@@ -890,33 +873,33 @@ void cpa::cpa(std::string data_path, std::string ct_path, std::string power_mode
 						for (unsigned int i = 0; i < num_bytes; i++) {
 
 							_HD += Hamming_pts
+								[ trace_indices[trace] ]
 								[i]
 								[ correct_round_key[round_key_index][i] ]
-								[ trace_indices[trace] ]
 									;
 
 							_0_1_flips += Hamming_pts__0_1_flips
+								[ trace_indices[trace] ]
 								[i]
 								[ correct_round_key[round_key_index][i] ]
-								[ trace_indices[trace] ]
 									;
 
 							_1_0_flips += Hamming_pts__1_0_flips
+								[ trace_indices[trace] ]
 								[i]
 								[ correct_round_key[round_key_index][i] ]
-								[ trace_indices[trace] ]
 									;
 
 							_flips_HD_bytes += std::abs(static_cast<int>(
 									Hamming_pts__0_1_flips
+										[ trace_indices[trace] ]
 										[i]
 										[ correct_round_key[round_key_index][i] ]
-										[ trace_indices[trace] ]
 									- 
 									Hamming_pts__1_0_flips
+										[ trace_indices[trace] ]
 										[i]
 										[ correct_round_key[round_key_index][i] ]
-										[ trace_indices[trace] ]
 									));
 						}
 
