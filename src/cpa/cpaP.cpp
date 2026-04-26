@@ -86,9 +86,11 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 	std::cout<<std::endl;
 
 	// Read in ciphertext and power data
+	auto start_time = std::chrono::system_clock::now();
 	csv::read_data(data_path, data);
 	csv::read_hex(ct_path, ciphertext);
-
+	std::cout << "Overall runtime for read_data and hex: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 	// Record the number of traces and the
 	// number of points per trace
 	num_traces = data.size();
@@ -99,6 +101,8 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 
 		// Read in the power model
 		csv::read_power_model(power_model_path, cells_type_path, clk_high, power_model);
+		std::cout << "Overall runtime for read_power: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+		start_time = std::chrono::system_clock::now();
 	}
 
 //	// dbg
@@ -162,7 +166,8 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 			}
 		}
 	}
-
+	std::cout << "Overall runtime for key prep: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 	// Handle the permutations file, if provided
 	if (perm_path != "") {
 
@@ -191,7 +196,8 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 			std::cout << "Reading of permutations file failed; permutations are generated randomly and written out to this file" << std::endl;
 		}
 	}
-
+	std::cout << "Overall runtime for permutation prep: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 	// Prepare main vectors
 	std::cout<<"\n";
 	std::cout<<"Allocating memory...\n";
@@ -212,11 +218,15 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 		(num_bytes, std::vector<unsigned int> (256, 0) ) );
 
 	std::vector<unsigned int> trace_indices (num_traces);
+	std::cout << "Overall runtime for initial setup: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 	// Prepare with all trace indices; required for shuffling/generating permutations in case they are not read in
 	#pragma omp parallel for
 	for (unsigned int i = 0; i < num_traces; i++) {
 		trace_indices[i] = i;
 	}
+	std::cout << "Overall runtime for trace_indice: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 
 	std::cout<<"Determine peak power values...\n";
 	std::cout<<std::endl;
@@ -239,6 +249,8 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 		power_pts[i] = local_max_pt;
 		avg_max_pt += local_max_pt;
 	}
+	std::cout << "Overall runtime for power loop: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 	avg_max_pt /= num_traces;
 	std::cout << std::dec << "Traces = " << num_traces << std::endl;
 	std::cout << std::dec << "Avg peak power = " << avg_max_pt << std::endl;
@@ -439,6 +451,8 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 	//	std::cout << std::endl;
 	//	exit(0);
 	}
+	std::cout << "Overall runtime for NICV: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 
 	if (HW) {
 		std::cout<<"Calculate Hamming weights...\n";
@@ -515,6 +529,8 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 			}
 		}
 	}
+	std::cout << "Overall runtime for hamming points: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 
 	// Consider multiple runs, as requested by step_size parameter
 	//
@@ -1088,6 +1104,8 @@ void cpaP::cpaP(std::string data_path, std::string ct_path, std::string power_mo
 			}
 		}
 	}
+	std::cout << "Overall runtime for correlation analysis: " << (std::chrono::system_clock::now() - start_time).count() << " ns" << std::endl;
+	start_time = std::chrono::system_clock::now();
 
 	if (perm_file_write) {
 		perm_file.close();
